@@ -154,7 +154,14 @@
       background-color: var(--accent-color);
       color: black;
     }
-    /* Chat Widget (kept for demonstration) */
+    /* Advanced Options Container (shown only in advanced mode) */
+    #advanced-options {
+      border: 1px dashed #555;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: none;
+    }
+    /* Chat Widget (for help) */
     #chat-toggle-button {
       position: fixed;
       bottom: 20px;
@@ -226,16 +233,23 @@
     <button id="load-button">Load Model</button>
     <hr>
     <label for="unwrap-mode">Unwrap Mode:</label>
+    <!-- Advanced option is now the first item and selected by default -->
     <select id="unwrap-mode">
-      <option value="spherical" selected>Spherical Projection</option>
+      <option value="advanced" selected>Advanced (Correction Exponent)</option>
+      <option value="spherical">Spherical Projection</option>
       <option value="cylindrical">Cylindrical Projection</option>
-      <option value="advanced">Advanced (Correction Exponent)</option>
     </select>
     <div class="tooltip">
-      Use advanced mode to apply a correction exponent to reduce distortion.
+      Advanced mode applies a correction exponent and optional smoothing.
     </div>
-    <label for="correction-exponent-slider">Correction Exponent: <span id="correction-exponent-value">0.80</span></label>
-    <input type="range" id="correction-exponent-slider" min="0.5" max="1.5" step="0.01" value="0.80">
+    <!-- Advanced options container -->
+    <div id="advanced-options">
+      <label for="correction-exponent-slider">Correction Exponent: <span id="correction-exponent-value">0.80</span></label>
+      <input type="range" id="correction-exponent-slider" min="0.5" max="1.5" step="0.01" value="0.80">
+      <label for="advanced-smoothing-slider">Smoothing Iterations: <span id="advanced-smoothing-value">10</span></label>
+      <input type="range" id="advanced-smoothing-slider" min="1" max="20" step="1" value="10">
+      <button id="reset-advanced-options">Reset Advanced Options</button>
+    </div>
     <label for="normalize-uv">Normalize UV Coordinates</label>
     <input type="checkbox" id="normalize-uv" checked>
     <label for="smart-seams">Enable Smart Seam Placement</label>
@@ -457,12 +471,11 @@
           const count = posAttr.count;
           const uv = new Float32Array(count * 2);
           if (mode === "cylindrical") {
-            // Compute min and max Y for v coordinate
             let minY = Infinity, maxY = -Infinity;
             for (let i = 0; i < count; i++) {
               const y = posAttr.getY(i);
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
+              minY = Math.min(minY, y);
+              maxY = Math.max(maxY, y);
             }
             for (let i = 0; i < count; i++) {
               const x = posAttr.getX(i), y = posAttr.getY(i), z = posAttr.getZ(i);
@@ -550,6 +563,13 @@
             this.distortionInfoDisplay.textContent = `Distortion Metric: ${distortion}`;
           }
           this.logMessage(`UV Unwrap complete (${mode}). Distortion: ${distortion}`);
+          // If in advanced mode, perform additional relaxation automatically using the advanced smoothing slider value.
+          if (mode === "advanced") {
+            const smoothingIterations = parseInt(document.getElementById('advanced-smoothing-slider').value, 10);
+            if (smoothingIterations > 0) {
+              this.relaxUV(smoothingIterations);
+            }
+          }
         } catch (err) {
           this.logMessage("Unwrap error: " + err.message);
         }
@@ -626,16 +646,14 @@
         reader.onload = (e) => {
           try {
             const object = new THREE.OBJLoader().parse(e.target.result);
-            // Remove any previous mesh from the scene
             if (this.currentMesh) {
               this.scene.remove(this.currentMesh);
               this.disposeMesh(this.currentMesh);
             }
-            // Collect all meshes from the loaded object
             let meshes = [];
             object.traverse(child => {
               if (child.isMesh) {
-                if(!child.geometry.attributes.normal) {
+                if (!child.geometry.attributes.normal) {
                   child.geometry.computeVertexNormals();
                 }
                 const count = child.geometry.attributes.position.count;
@@ -644,7 +662,6 @@
               }
             });
             if (meshes.length > 1) {
-              // Merge multiple meshes into one geometry
               const geometries = meshes.map(m => m.geometry);
               const mergedGeometry = THREE.BufferGeometryUtils.mergeBufferGeometries(geometries);
               this.currentMesh = new THREE.Mesh(mergedGeometry, new THREE.MeshStandardMaterial({
@@ -799,6 +816,45 @@
       } catch (err) {
         console.error("UVUnwrapper initialization error:", err);
       }
+      // Show/hide advanced options based on unwrap mode selection
+      const unwrapModeSelect = document.getElementById('unwrap-mode');
+      const advancedOptionsDiv = document.getElementById('advanced-options');
+      function updateAdvancedOptionsVisibility() {
+        if (unwrapModeSelect.value === "advanced") {
+          advancedOptionsDiv.style.display = "block";
+        } else {
+          advancedOptionsDiv.style.display = "none";
+        }
+      }
+      unwrapModeSelect.addEventListener('change', updateAdvancedOptionsVisibility);
+      updateAdvancedOptionsVisibility(); // Initialize on load
+
+      // Update correction exponent display
+      const exponentSlider = document.getElementById('correction-exponent-slider');
+      const exponentDisplay = document.getElementById('correction-exponent-value');
+      exponentSlider.addEventListener('input', (event) => {
+        uvUnwrapper.correctionExponent = parseFloat(event.target.value);
+        if (exponentDisplay) {
+          exponentDisplay.textContent = parseFloat(event.target.value).toFixed(2);
+        }
+      });
+      // Update advanced smoothing iterations display
+      const smoothingSlider = document.getElementById('advanced-smoothing-slider');
+      const smoothingDisplay = document.getElementById('advanced-smoothing-value');
+      smoothingSlider.addEventListener('input', (event) => {
+        if (smoothingDisplay) {
+          smoothingDisplay.textContent = event.target.value;
+        }
+      });
+      // Reset advanced options button
+      document.getElementById('reset-advanced-options').addEventListener('click', () => {
+        exponentSlider.value = 0.80;
+        smoothingSlider.value = 10;
+        exponentDisplay.textContent = "0.80";
+        smoothingDisplay.textContent = "10";
+        uvUnwrapper.correctionExponent = 0.80;
+      });
+      
       document.getElementById('load-button').addEventListener('click', () => {
         document.getElementById('fileInput').click();
       });
@@ -814,14 +870,6 @@
       document.getElementById('reset-camera-button').addEventListener('click', () => uvUnwrapper.resetCamera());
       document.getElementById('toggle-grid-button').addEventListener('click', () => uvUnwrapper.toggleGrid());
       document.getElementById('toggle-wireframe-button').addEventListener('click', () => uvUnwrapper.toggleWireframe());
-      const exponentSlider = document.getElementById('correction-exponent-slider');
-      const exponentDisplay = document.getElementById('correction-exponent-value');
-      exponentSlider.addEventListener('input', (event) => {
-        uvUnwrapper.correctionExponent = parseFloat(event.target.value);
-        if (exponentDisplay) {
-          exponentDisplay.textContent = parseFloat(event.target.value).toFixed(2);
-        }
-      });
       document.getElementById('toggle-mode').addEventListener('click', () => {
         document.body.classList.toggle("light-mode");
       });
